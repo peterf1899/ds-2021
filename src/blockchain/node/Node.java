@@ -27,6 +27,7 @@ public class Node implements NodeConnector {
     private int numberOfBlockchainsRecieved = 0;
     private boolean isValid = true;
     private List<Block> tmpBlockchain = new ArrayList<>();
+    private Block justCreatedBlock = null;
 
     public Node(String name) throws Exception {
         // Create data storage of a node
@@ -53,7 +54,7 @@ public class Node implements NodeConnector {
     private List<Transaction> parseTransactions(String transactions) {
         if (transactions == null || transactions.equals("") || transactions.equals("null")) return new ArrayList<>();
         List<Transaction> transactions1 = new ArrayList<>();
-        for (String transaction :  List.of(transactions.split("\n"))) {
+        for (String transaction : List.of(transactions.split("\n"))) {
             List<String> item = List.of(transaction.split("\\|"));
             transactions1.add(new Transaction(item.get(0), Long.parseLong(item.get(1)), item.get(2)));
         }
@@ -171,7 +172,7 @@ public class Node implements NodeConnector {
                     e.printStackTrace();
                 }
 
-                this.blockchain.add(block);
+                this.justCreatedBlock = block;
                 broadcastNewBlock(this.address, block, true);
                 this.transactionList = new ArrayList<>();
             }
@@ -211,8 +212,7 @@ public class Node implements NodeConnector {
             }
         }
 
-        neighbors = this.nodeDataStorage.getNeighbors();
-        for (String neighbor : neighbors) {
+        for (String neighbor : this.nodeDataStorage.getNeighbors()) {
             String[] neighborAddress = neighbor.split(":");
             try {
                 NodeConnector neighborNode = (NodeConnector) LocateRegistry.getRegistry(neighborAddress[0], Integer.parseInt(neighborAddress[1])).lookup(SERVICE_NAME);
@@ -238,15 +238,16 @@ public class Node implements NodeConnector {
 
     @Override
     public void responseBlockchain(List<Block> blockchain, boolean retry) throws RemoteException {
+        int size1 = this.getNeighbors().size();
         this.numberOfBlockchainsRecieved++;
 
 //        LONGEST BLOCKCHAIN
-        if(blockchain.size() > this.tmpBlockchain.size()){
+        if (blockchain.size() >= this.tmpBlockchain.size()) {
             this.tmpBlockchain = blockchain;
         }
 
 
-        if(numberOfBlockchainsRecieved == this.getNeighbors().size()){
+        if (numberOfBlockchainsRecieved == size1) {
 //            RESET AND SET NEW BLOCKCHAIN
             System.out.println("recieved block from all nodes");
             this.blockchain = this.tmpBlockchain;
@@ -256,7 +257,7 @@ public class Node implements NodeConnector {
                 e.printStackTrace();
             }
 
-            if(retry) {
+            if (retry) {
                 System.out.println("im creator");
                 if (transactionList.size() > 3) {
                     System.out.println("creating new block with updated blockchain");
@@ -271,8 +272,8 @@ public class Node implements NodeConnector {
                         e.printStackTrace();
                     }
 
-                    System.out.println("forwarding new block " +block.getId());
-                    this.blockchain.add(block);
+                    System.out.println("forwarding new block " + block.getId());
+                    this.justCreatedBlock = block;
                     broadcastNewBlock(this.address, block, true);
                     this.transactionList = new ArrayList<>();
                     try {
@@ -284,17 +285,16 @@ public class Node implements NodeConnector {
             }
             this.numberOfBlockchainsRecieved = 0;
             this.tmpBlockchain = new ArrayList<>();
-
         }
     }
 
     @Override
     public void broadcastNewBlock(String address, Block block, boolean forward) throws RemoteException {
-        int size = blockchain.size();
+        int size = this.blockchain.size();
         Block myBlock = null;
         try {
-            myBlock = new Block(blockchain.get(size - 1).getId(),
-                    blockchain.get(size - 1).getBlockHash(),
+            myBlock = new Block(this.blockchain.get(size - 1).getId(),
+                    this.blockchain.get(size - 1).getBlockHash(),
                     transactionList,
                     block.getTimestamp());
         } catch (NoSuchAlgorithmException e) {
@@ -306,17 +306,12 @@ public class Node implements NodeConnector {
             String[] creatorAddress = address.split(":");
             try {
                 NodeConnector creatorNode = (NodeConnector) LocateRegistry.getRegistry(creatorAddress[0], Integer.parseInt(creatorAddress[1])).lookup(SERVICE_NAME);
-                boolean isValid = myBlock.getBlockHash().equals(block.getBlockHash())  && (myBlock.getId() == block.getId());
+                boolean isValid = myBlock.getBlockHash().equals(block.getBlockHash()) && (myBlock.getId() == block.getId());
                 System.out.println("validating " + Arrays.toString(creatorAddress) + "..." + isValid);
                 creatorNode.validateBlock(isValid);
-                if (isValid) {
-                    this.blockchain.add(block);
-                    this.nodeDataStorage.setBlockchain(this.getBlockchain());
-                    this.transactionList = new ArrayList<>();
-                }else{
+                if (!isValid) {
 //                    request blockchain from all
-                    List<String> neighbors = this.nodeDataStorage.getNeighbors();
-                    for (String neighbor : neighbors) {
+                    for (String neighbor : this.nodeDataStorage.getNeighbors()) {
                         String[] neighborStrings = neighbor.split(":");
                         try {
                             NodeConnector neighborNode = (NodeConnector) LocateRegistry.getRegistry(neighborStrings[0], Integer.parseInt(neighborStrings[1])).lookup(SERVICE_NAME);
@@ -357,25 +352,44 @@ public class Node implements NodeConnector {
 
     @Override
     public void validateBlock(boolean valid) {
-        this.numberOfValidationCalls++;
         int pocetSusedov = this.nodeDataStorage.getNeighbors().size();
+        this.numberOfValidationCalls++;
+        System.out.println(this.numberOfValidationCalls);
         this.isValid = this.isValid && valid;
 
+        System.out.println(isValid);
         if (pocetSusedov == this.numberOfValidationCalls) {
-            System.out.println("block is " + isValid);
-            if(isValid){
+            if (isValid) {
+                this.numberOfValidationCalls = 0;
+                this.blockchain.add(this.justCreatedBlock);
+                this.justCreatedBlock = null;
                 System.out.println("creating new block, deleting transaction list");
                 try {
                     this.nodeDataStorage.setBlockchain(this.getBlockchain());
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
+
+                for (String neighbor : this.nodeDataStorage.getNeighbors()) {
+                    String[] neighborStrings = neighbor.split(":");
+                    try {
+                        NodeConnector neighborNode = (NodeConnector) LocateRegistry.getRegistry(neighborStrings[0], Integer.parseInt(neighborStrings[1])).lookup(SERVICE_NAME);
+                        neighborNode.saveBlock(this.getBlockchain());
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+
+                }
+
                 try {
                     this.TDStorage.rmTransactions();
                 } catch (IOException e) {
                     e.printStackTrace();
                 }
-            }else{
+            } else {
+                this.justCreatedBlock = null;
+                this.isValid = true;
+                this.numberOfValidationCalls = 0;
                 System.out.println("updating blockchain and will create new block");
                 for (String neighbor : this.nodeDataStorage.getNeighbors()) {
                     String[] neighborStrings = neighbor.split(":");
@@ -388,8 +402,21 @@ public class Node implements NodeConnector {
 
                 }
             }
-            this.isValid= true;
+            this.isValid = true;
             this.numberOfValidationCalls = 0;
         }
     }
+
+
+    public void saveBlock(List<Block> blockchain) throws RemoteException {
+        System.out.println("block is valid, saving ... " + blockchain.get(blockchain.size() - 1));
+        this.blockchain.add(blockchain.get(blockchain.size() - 1));
+        try {
+            this.nodeDataStorage.setBlockchain(this.getBlockchain());
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        this.transactionList = new ArrayList<>();
+    }
+
 }

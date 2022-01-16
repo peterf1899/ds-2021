@@ -24,4 +24,5 @@ public interface NodeConnector extends Remote{
     List<String> getNeighbors() throws RemoteException;
     void requestBlockchain(String address, boolean retry) throws RemoteException;
     void responseBlockchain(List<Block> blockchain, boolean retry) throws RemoteException;
+    void saveBlock(List<Block> blockchain) throws RemoteException;
 }
