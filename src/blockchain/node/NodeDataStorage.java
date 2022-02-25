@@ -16,6 +16,7 @@ public class NodeDataStorage extends DataStorage {
     private static final String NEIGHBORS = "neighbors";
     private static final String BLOCKCHAIN = "blockchain";
     private static final String DETERMINER = " ;; ";
+    private static final String TRANSACTIONS = "transactions";
 
     public NodeDataStorage(String fileName) throws Exception {
         super(fileName);
@@ -98,6 +99,40 @@ public class NodeDataStorage extends DataStorage {
             transactions1.add(new Transaction(a.get(0), Long.parseLong(a.get(1)), a.get(2)));
         }
         return transactions1;
+    }
+
+
+    public synchronized void setTransactions(List<Transaction> transactionList) throws Exception{
+        List<String> a = new ArrayList<>();
+        for (Transaction t : transactionList) {
+            a.add(t.toString());
+        }
+        String transactionString = String.join(DETERMINER, a);
+        set(TRANSACTIONS, transactionString);
+    }
+
+
+    public synchronized List<Transaction> getTransactions()  {
+        List<String> transactions = List.of(get(TRANSACTIONS).split(DETERMINER));
+        if (transactions.get(0).equals("") || transactions.get(0) == null) {
+//            System.out.println("EMPTY");
+            return new ArrayList<>();
+
+        } else {
+//            System.out.println("NOT EMPTY");
+            List<Transaction> transactionList1 = new ArrayList<>();
+
+            for (String t : transactions) {
+                List<String> transaction = List.of(t.split("\\|"));
+                transactionList1.add(new Transaction(
+                        transaction.get(0),
+                        Long.parseLong(transaction.get(1)),
+                        transaction.get(2)
+                ));
+            }
+            return transactionList1;
+
+        }
     }
 
 }

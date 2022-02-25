@@ -2,9 +2,6 @@ package blockchain.node;
 
 import blockchain.block.Block;
 import blockchain.block.Transaction;
-import blockchain.block.TransactionDataStorage;
-
-import java.io.IOException;
 import java.rmi.NotBoundException;
 import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;
@@ -20,13 +17,14 @@ public class Node implements NodeConnector {
     private String address;
     private Registry registry;
     private Heartbeat heartbeat;
-    private TransactionDataStorage TDStorage;
     private List<Transaction> transactionList;
     private List<Block> blockchain;
     private int numberOfValidationCalls = 0;
     private int numberOfBlockchainsRecieved = 0;
+    private int numberOfTransactions = 0;
     private boolean isValid = true;
     private List<Block> tmpBlockchain = new ArrayList<>();
+    private List<Transaction> tmpTransactions = new ArrayList<>();
     private Block justCreatedBlock = null;
 
     public Node(String name) throws Exception {
@@ -45,21 +43,109 @@ public class Node implements NodeConnector {
         // Start heartbeat thread
         this.heartbeat = new Heartbeat(this);
         this.heartbeat.start();
-        this.TDStorage = new TransactionDataStorage();
-        this.transactionList = this.parseTransactions(this.TDStorage.getTransactions());
         this.blockchain = this.nodeDataStorage.getBlockchain();
-    }
 
-
-    private List<Transaction> parseTransactions(String transactions) {
-        if (transactions == null || transactions.equals("") || transactions.equals("null")) return new ArrayList<>();
-        List<Transaction> transactions1 = new ArrayList<>();
-        for (String transaction : List.of(transactions.split("\n"))) {
-            List<String> item = List.of(transaction.split("\\|"));
-            transactions1.add(new Transaction(item.get(0), Long.parseLong(item.get(1)), item.get(2)));
+        if(this.nodeDataStorage.getNeighbors().size() == 0){
+            System.out.println("i have no neighbours, keeping my persisted transaction list and blockchain");
+            this.transactionList = this.nodeDataStorage.getTransactions();
+            this.blockchain = this.nodeDataStorage.getBlockchain();
+        }else{
+            System.out.println("i have neighbours, im honest, dropping my transaction list and blockchain, will sync");
+            this.nodeDataStorage.setTransactions(new ArrayList<>());
+            this.nodeDataStorage.setBlockchain(new ArrayList<>());
+            this.synchronize();
         }
-        return transactions1;
+
+
     }
+
+    @Override
+    public String getAddress() throws RemoteException {
+        return address;
+    }
+
+    @Override
+    public void responseTransaction(List<Transaction> transactions) throws RemoteException {
+        int size1 = this.getNeighbors().size();
+        this.numberOfTransactions++;
+
+        if (transactions.size() >= this.tmpTransactions.size()) this.tmpTransactions = transactions;
+
+        if (numberOfTransactions == size1) {
+            System.out.print("recieved transacations from all blocks, evalutating... ");
+            this.transactionList = this.tmpTransactions;
+            try {
+                this.nodeDataStorage.setTransactions(this.getTransactionList());
+                System.out.print("Done");
+                System.out.println();
+            } catch (Exception e) {
+                System.out.println("Something went wrong during transaction sync");
+               e.printStackTrace();
+            }
+            this.numberOfBlockchainsRecieved = 0;
+            this.tmpBlockchain = new ArrayList<>();
+        }
+    }
+
+    private void synchronize(){
+        try {
+            Thread.sleep(2500);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        for (String neighbor : this.nodeDataStorage.getNeighbors()) {
+
+            // Do not forward back to sender node
+            if (!neighbor.equals(address)) {
+                String[] neighborStrings = neighbor.split(":");
+                try {
+                    NodeConnector neighborNode = (NodeConnector) LocateRegistry.getRegistry(neighborStrings[0], Integer.parseInt(neighborStrings[1])).lookup(SERVICE_NAME);
+//                    neighborNode.requestTransactions(this.address);
+                    neighborNode.requestBlockchain(this.address, false);
+                } catch (Exception e) {
+                    System.out.println(e);
+
+                }
+            }
+        }
+
+
+            try {
+                Thread.sleep(500);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+
+        for (String neighbor : this.nodeDataStorage.getNeighbors()) {
+
+            // Do not forward back to sender node
+            if (!neighbor.equals(address)) {
+                String[] neighborStrings = neighbor.split(":");
+                try {
+                    NodeConnector neighborNode = (NodeConnector) LocateRegistry.getRegistry(neighborStrings[0], Integer.parseInt(neighborStrings[1])).lookup(SERVICE_NAME);
+                    neighborNode.requestTransactions(this.address);
+//                    neighborNode.requestBlockchain(this.address, false);
+                } catch (Exception e) {
+                    System.out.println(e);
+
+                }
+            }
+        }
+    }
+
+
+    @Override
+    public void requestTransactions(String address) throws RemoteException {
+        String[] senderAddress = address.split(":");
+        try {
+            NodeConnector sender = (NodeConnector) LocateRegistry.getRegistry(senderAddress[0], Integer.parseInt(senderAddress[1])).lookup((SERVICE_NAME));
+            sender.responseTransaction(this.nodeDataStorage.getTransactions());
+        } catch (NotBoundException e) {
+            e.printStackTrace();
+        }
+    }
+
 
     @Override
     public List<String> getNeighbors() throws RemoteException {
@@ -131,17 +217,9 @@ public class Node implements NodeConnector {
     @Override
     public void createTransaction(String address, Transaction transaction, boolean forward) throws RemoteException {
         System.out.println("Received transaction: " + transaction);
-        this.transactionList.add(transaction);
         // Forward transaction to all neighbors
         if (forward) {
-            try {
-                this.TDStorage.appendTransaction(transaction.toString());
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-
             for (String neighbor : this.nodeDataStorage.getNeighbors()) {
-
                 // Do not forward back to sender node
                 if (!neighbor.equals(address)) {
                     String[] neighborStrings = neighbor.split(":");
@@ -155,30 +233,30 @@ public class Node implements NodeConnector {
             }
         }
 
-        if (transactionList.size() > 3) {
-//            TODO SORT BY DATE?
-
-//            TODO SELECT FIRST AND CHECK IF ITS MY IP
-//            TODO IF YES, CREATE BLOCK and BROADCAST IT, ELSE SKIP
-            if (transactionList.get(0).getOwnerId().equals(this.address)) {
-                int size = this.blockchain.size();
-                Block block = null;
-                try {
-                    block = new Block((this.blockchain.get(size - 1).getId()),
-                            this.blockchain.get(size - 1).getBlockHash(),
-                            transactionList,
-                            new Date().getTime());
-                } catch (NoSuchAlgorithmException e) {
-                    e.printStackTrace();
-                }
-
-                this.justCreatedBlock = block;
-                broadcastNewBlock(this.address, block, true);
-                this.transactionList = new ArrayList<>();
-            }
-
+        this.transactionList.add(transaction);
+        try {
+            this.nodeDataStorage.setTransactions(this.getTransactionList());
+        } catch (Exception e) {
+            e.printStackTrace();
         }
 
+//        if (transactionList.size() > 3 && transactionList.get(0).getOwnerId().equals(this.address)) {
+//
+//            int size = this.blockchain.size();
+//            Block block = null;
+//            try {
+//                block = new Block((this.blockchain.get(size - 1).getId()),
+//                        this.blockchain.get(size - 1).getBlockHash(),
+//                        transactionList,
+//                        new Date().getTime());
+//            } catch (NoSuchAlgorithmException e) {
+//                e.printStackTrace();
+//            }
+//
+//            this.justCreatedBlock = block;
+//            broadcastNewBlock(this.address, block, true);
+//            this.transactionList = new ArrayList<>();
+//        }
     }
 
 
@@ -249,11 +327,14 @@ public class Node implements NodeConnector {
 
         if (numberOfBlockchainsRecieved == size1) {
 //            RESET AND SET NEW BLOCKCHAIN
-            System.out.println("recieved block from all nodes");
+            System.out.print("recieved blockchain from all nodes, evaluting... ");
             this.blockchain = this.tmpBlockchain;
             try {
                 this.nodeDataStorage.setBlockchain(this.blockchain);
+                System.out.print("Done");
+                System.out.println();
             } catch (Exception e) {
+                System.out.println("Something went wrong during blockchain sync");
                 e.printStackTrace();
             }
 
@@ -276,9 +357,14 @@ public class Node implements NodeConnector {
                     this.justCreatedBlock = block;
                     broadcastNewBlock(this.address, block, true);
                     this.transactionList = new ArrayList<>();
+//                    try {
+//                        this.TDStorage.rmTransactions();
+//                    } catch (IOException e) {
+//                        e.printStackTrace();
+//                    }
                     try {
-                        this.TDStorage.rmTransactions();
-                    } catch (IOException e) {
+                        this.nodeDataStorage.setTransactions(this.getTransactionList());
+                    } catch (Exception e) {
                         e.printStackTrace();
                     }
                 }
@@ -290,6 +376,7 @@ public class Node implements NodeConnector {
 
     @Override
     public void broadcastNewBlock(String address, Block block, boolean forward) throws RemoteException {
+
         int size = this.blockchain.size();
         Block myBlock = null;
         try {
@@ -307,7 +394,7 @@ public class Node implements NodeConnector {
             try {
                 NodeConnector creatorNode = (NodeConnector) LocateRegistry.getRegistry(creatorAddress[0], Integer.parseInt(creatorAddress[1])).lookup(SERVICE_NAME);
                 boolean isValid = myBlock.getBlockHash().equals(block.getBlockHash()) && (myBlock.getId() == block.getId());
-                System.out.println("validating " + Arrays.toString(creatorAddress) + "..." + isValid);
+                System.out.println("Validating block from " + Arrays.toString(creatorAddress) + " ... " + isValid);
                 creatorNode.validateBlock(isValid);
                 if (!isValid) {
 //                    request blockchain from all
@@ -339,7 +426,6 @@ public class Node implements NodeConnector {
                     try {
                         NodeConnector neighborNode = (NodeConnector) LocateRegistry.getRegistry(neighborStrings[0], Integer.parseInt(neighborStrings[1])).lookup(SERVICE_NAME);
                         neighborNode.broadcastNewBlock(this.address, block, false);
-                        System.out.println("Forwarding block to node " + neighbor + ".");
                     } catch (Exception e) {
                         System.out.println(e);
                         System.out.println("Cannot forward block to node " + neighbor + ".");
@@ -354,36 +440,47 @@ public class Node implements NodeConnector {
     public void validateBlock(boolean valid) {
         int pocetSusedov = this.nodeDataStorage.getNeighbors().size();
         this.numberOfValidationCalls++;
-        System.out.println(this.numberOfValidationCalls);
+//        System.out.println(this.numberOfValidationCalls);
         this.isValid = this.isValid && valid;
 
-        System.out.println(isValid);
+
         if (pocetSusedov == this.numberOfValidationCalls) {
             if (isValid) {
+                System.out.println("Block is valid, proceding...");
                 this.numberOfValidationCalls = 0;
                 this.blockchain.add(this.justCreatedBlock);
                 this.justCreatedBlock = null;
-                System.out.println("creating new block, deleting transaction list");
+                System.out.print("Saving block to blockchain ...");
                 try {
                     this.nodeDataStorage.setBlockchain(this.getBlockchain());
+                    System.out.print(" Done");
+                    System.out.println();
                 } catch (Exception e) {
+                    System.out.println("Something went wrong while saving blockchain");
                     e.printStackTrace();
                 }
 
+                System.out.println("Sending message to "+ this.nodeDataStorage.getNeighbors().size()+" neighbours to save new block");
                 for (String neighbor : this.nodeDataStorage.getNeighbors()) {
                     String[] neighborStrings = neighbor.split(":");
                     try {
                         NodeConnector neighborNode = (NodeConnector) LocateRegistry.getRegistry(neighborStrings[0], Integer.parseInt(neighborStrings[1])).lookup(SERVICE_NAME);
                         neighborNode.saveBlock(this.getBlockchain());
+                        System.out.println(neighbor+"... Done");
                     } catch (Exception e) {
+                        System.out.println("Something went wrong sending save message to "+ neighbor);
                         e.printStackTrace();
                     }
 
                 }
 
+                System.out.print("Clearing transactions...");
+                this.transactionList = new ArrayList<>();
                 try {
-                    this.TDStorage.rmTransactions();
-                } catch (IOException e) {
+                    this.nodeDataStorage.setTransactions(this.getTransactionList());
+                    System.out.println(" Done");
+                } catch (Exception e) {
+                    System.out.println("Something went wrong while clearing transactions");
                     e.printStackTrace();
                 }
             } else {
@@ -409,7 +506,7 @@ public class Node implements NodeConnector {
 
 
     public void saveBlock(List<Block> blockchain) throws RemoteException {
-        System.out.println("block is valid, saving ... " + blockchain.get(blockchain.size() - 1));
+        System.out.print("block is valid, saving... " + blockchain.get(blockchain.size() - 1));
         this.blockchain.add(blockchain.get(blockchain.size() - 1));
         try {
             this.nodeDataStorage.setBlockchain(this.getBlockchain());
@@ -417,6 +514,57 @@ public class Node implements NodeConnector {
             e.printStackTrace();
         }
         this.transactionList = new ArrayList<>();
+        try {
+            this.nodeDataStorage.setTransactions(this.getTransactionList());
+            System.out.print(" Done");
+            System.out.println();
+        } catch (Exception e) {
+            System.out.println("Something went wrong while clearing transaction list after saving new block");
+            e.printStackTrace();
+        }
     }
 
+    @Override
+    public void createNewBlock() throws RemoteException {
+//      loop through transacion list
+        for (Transaction t: this.transactionList){
+//            check if im creator
+            if(t.getOwnerId().equals(this.address)){
+                this.newBlock();
+                break;
+            }else{
+//              who created transaction
+                String creator = t.getOwnerId();
+
+//              check if creator of transacion is available
+                if(this.getNeighbors().contains(creator)){
+                    //tell him to create block
+                    try {
+                        NodeConnector neighborNode = (NodeConnector) LocateRegistry.getRegistry(creator.split(":")[0], Integer.parseInt(creator.split(":")[1])).lookup(SERVICE_NAME);
+                        neighborNode.newBlock();
+                    } catch (Exception e) {
+                        System.out.println(e);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    @Override
+    public void newBlock() throws RemoteException {
+        int size = this.blockchain.size();
+        Block block = null;
+        try {
+            block = new Block((this.blockchain.get(size - 1).getId()),
+                    this.blockchain.get(size - 1).getBlockHash(),
+                    transactionList,
+                    new Date().getTime());
+        } catch (NoSuchAlgorithmException e) {
+            e.printStackTrace();
+        }
+
+        this.justCreatedBlock = block;
+        this.broadcastNewBlock(this.address, block, true);
+    }
 }

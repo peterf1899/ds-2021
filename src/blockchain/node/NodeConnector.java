@@ -22,7 +22,12 @@ public interface NodeConnector extends Remote{
     List<Block> getBlockchain() throws RemoteException;
     List<Transaction> getTransactionList() throws RemoteException;
     List<String> getNeighbors() throws RemoteException;
+    String getAddress() throws RemoteException;
     void requestBlockchain(String address, boolean retry) throws RemoteException;
     void responseBlockchain(List<Block> blockchain, boolean retry) throws RemoteException;
     void saveBlock(List<Block> blockchain) throws RemoteException;
+    void requestTransactions(String address) throws RemoteException;
+    void responseTransaction(List<Transaction> transactions) throws RemoteException;
+    void createNewBlock() throws RemoteException;
+    void newBlock() throws RemoteException;
 }

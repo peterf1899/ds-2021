@@ -3,7 +3,7 @@ package blockchain.node;
 
 public class Heartbeat implements Runnable {
 
-    private static final int PERIOD = 5000;
+    private static final int PERIOD = 1000;
 
     private Node node;
     private boolean running;
@@ -37,6 +37,7 @@ public class Heartbeat implements Runnable {
 
         // Activity of heartbeat
         while (isRunning()) {
+//            System.out.println("beat");
             this.node.connectNeighbors();
             try {
                 Thread.sleep(PERIOD);

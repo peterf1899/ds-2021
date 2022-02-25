@@ -82,8 +82,9 @@ public class Blockchain {
                     try {
                         Transaction transaction = new Transaction(address, new Date().getTime(), text);
                         System.out.println(transaction);
-                        node.createTransaction(null, transaction, true);
+                        node.createTransaction(node.getAddress(), transaction, true);
                         System.out.println("transaction \"" + text + "\" from node " + address + ".");
+                        if(node.getTransactionList().size() > 3) node.createNewBlock();
                     }
                     catch (Exception e) {
                         System.out.println(e);
